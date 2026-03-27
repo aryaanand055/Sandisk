@@ -1,5 +1,6 @@
 import os
 import uuid
+import subprocess
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -159,6 +160,44 @@ def apply_fix(req: ApplyFixRequest):
         return {"status": "success"}
     except Exception as e:
         return {"error": str(e)}
+
+@app.post("/connect-zybo")
+def connect_zybo(req: SyntaxCheckRequest):
+    """
+    Writes the provided RTL to a temporary file and executes a 
+    connection script located on the user's Desktop.
+    """
+    rtl_content = req.rtl
+    # Desktop path detection for Windows
+    desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+    # Using a placeholder name - the user can rename their file to match or specify the name
+    script_name = "zybo_connect.py" 
+    script_path = os.path.join(desktop_path, script_name)
+
+    if not os.path.exists(script_path):
+        return {
+            "error": f"Connection script '{script_name}' not found on Desktop. Please ensure it exists at: {script_path}",
+            "status": "error"
+        }
+
+    # Save to a temporary file for the script to handle
+    tmp_path = os.path.join(os.path.dirname(__file__), "current_zybo_rtl.v")
+    with open(tmp_path, "w") as f:
+        f.write(rtl_content)
+
+    try:
+        # Execute the desktop script, passing the path to the RTL file
+        result = subprocess.run(["python", script_path, tmp_path], capture_output=True, text=True, timeout=30)
+        return {
+            "status": "success",
+            "output": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.returncode
+        }
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "error": "Execution timed out (30s)."}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

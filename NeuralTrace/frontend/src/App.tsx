@@ -3,7 +3,7 @@ import axios from 'axios';
 import { 
   GitBranch, GitCommit, Play, FileCode, ArrowRightLeft, 
   AlertCircle, Files, Sparkles, ChevronDown, Check, 
-  RotateCcw, MoreHorizontal 
+  RotateCcw, MoreHorizontal, Cpu 
 } from 'lucide-react';
 import CodeEditor from './components/CodeEditor';
 import ImpactGraph from './components/ImpactGraph';
@@ -248,6 +248,26 @@ function App() {
     }
   };
 
+  const handleConnectZybo = async () => {
+    const currentCode = activeFile === 'clk_divider.v' ? workingRtl : fileContents[activeFile];
+    if (!currentCode) return alert("Open a file to connect to Zybo");
+
+    setIsAnalyzing(true); // Reusing analyzing state for loading UI
+    try {
+      const res = await axios.post(`${API_URL}/connect-zybo`, { rtl: currentCode });
+      if (res.data.status === 'success') {
+        alert("Zybo Connection Success:\n" + res.data.output);
+      } else {
+        alert("Zybo Connection Failed:\n" + (res.data.error || res.data.stderr));
+      }
+    } catch (err) {
+       console.error(err);
+       alert("Error connecting to Zybo server.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   const leftContent = diffLeft === 'working' ? workingRtl : (history.find(c => c.id === diffLeft)?.content || '');
   const rightContent = diffRight === 'working' ? workingRtl : (history.find(c => c.id === diffRight)?.content || '');
 
@@ -303,6 +323,20 @@ function App() {
                 <Play size={14} /> Diff
               </button>
            </div>
+
+           {/* Hardware Connection */}
+           <button 
+             onClick={handleConnectZybo}
+             disabled={isAnalyzing}
+             className={`flex items-center gap-2 px-4 py-1.5 rounded text-[11px] font-bold uppercase tracking-wider transition-all shadow-lg ${
+               isAnalyzing 
+                ? 'bg-gray-600/50 text-gray-500 cursor-not-allowed' 
+                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/20 active:scale-95'
+             }`}
+           >
+             <Cpu size={14} className={isAnalyzing ? 'animate-pulse' : ''} /> 
+             {isAnalyzing ? 'Connecting...' : 'Connect to Zybo'}
+           </button>
         </div>
       </header>
 
