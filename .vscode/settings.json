@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "NeuralTrace/backend/venv/Scripts/python.exe",
+  "python.analysis.extraPaths": [
+    "./NeuralTrace/backend"
+  ],
+  "python.terminal.activateEnvironment": true
+}

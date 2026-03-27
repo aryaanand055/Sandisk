@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from core.ai import AIEngine
+from pyverilog.vparser.parser import VerilogParser
 
 app = FastAPI(title="Neural Trace API")
 
@@ -20,21 +21,73 @@ class AnalyzeRequest(BaseModel):
     old_rtl: str
     new_rtl: str
 
+class SyntaxCheckRequest(BaseModel):
+    rtl: str
+
+class CreateFileRequest(BaseModel):
+    name: str
+    type: str  # 'rtl' or 'testbench'
+
+class ApplyFixRequest(BaseModel):
+    path: str
+    fixed_code: str
+
 @app.get("/")
 def read_root():
     return {"message": "Neural Trace API is running"}
+
+@app.post("/files")
+def create_file(req: CreateFileRequest):
+    base_dir = os.path.dirname(__file__)
+    if req.type == "testbench":
+        target_dir = os.path.join(base_dir, "testbenches")
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+        file_path = os.path.join(target_dir, req.name)
+    else:
+        file_path = os.path.join(base_dir, req.name)
+    
+    if os.path.exists(file_path):
+        return {"error": "File already exists"}
+    
+    with open(file_path, "w") as f:
+        f.write("// New file " + req.name + "\n")
+    
+    return {"status": "success", "path": req.name if req.type != "testbench" else f"testbenches/{req.name}"}
+@app.delete("/file/{path:path}")
+def delete_file(path: str):
+    if path == "design.v":
+        return {"error": "Cannot delete the main design file"}
+    
+    base_dir = os.path.dirname(__file__)
+    file_path = os.path.join(base_dir, path)
+    
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            return {"status": "success"}
+        except Exception as e:
+            return {"error": str(e)}
+    return {"error": "File not found"}
 
 @app.get("/files")
 def list_all_files():
     # In a real app, we'd walk the whole project. 
     # For now, we manually provide the specific folders.
     files = []
+    base_dir = os.path.dirname(__file__)
     
-    # 1. Root / Main files
-    files.append({"name": "design.v", "path": "design.v", "type": "rtl"})
+    # 1. Root / Main files (excluding the testbenches directory and system files)
+    for f in os.listdir(base_dir):
+        if f.endswith(('.v', '.sv')) and os.path.isfile(os.path.join(base_dir, f)):
+            files.append({"name": f, "path": f, "type": "rtl"})
     
+    # Ensure led_blinker.v is there if present
+    if not any(f["path"] == "led_blinker.v" for f in files) and os.path.exists(os.path.join(base_dir, "led_blinker.v")):
+        files.insert(0, {"name": "led_blinker.v", "path": "led_blinker.v", "type": "rtl"})
+
     # 2. Testbenches
-    tb_dir = os.path.join(os.path.dirname(__file__), "testbenches")
+    tb_dir = os.path.join(base_dir, "testbenches")
     if os.path.exists(tb_dir):
         for f in os.listdir(tb_dir):
             if f.endswith(('.v', '.sv')):
@@ -46,33 +99,41 @@ def list_all_files():
 def get_file_content(path: str):
     # This is a bit simplified for security, but okay for a local prototype
     base_dir = os.path.dirname(__file__)
-    if path == "design.v":
-        # We might have a physical design.v file or just use the initial state.
-        # Let's check for it.
-        file_path = os.path.join(base_dir, "design.v")
-        if not os.path.exists(file_path):
-            return {"content": "module empty(); endmodule"}
-    else:
-        file_path = os.path.join(base_dir, path)
+    file_path = os.path.join(base_dir, path)
     
     if os.path.exists(file_path):
         with open(file_path, "r") as f:
             return {"content": f.read()}
     return {"error": "File not found"}
 
+@app.post("/check-syntax")
+def check_syntax(req: SyntaxCheckRequest):
+    parser = VerilogParser()
+    try:
+        # Use a temporary file for parsing if needed, but pyverilog's parser can take a string
+        # Actually, pyverilog's parser.parse() takes code as a string!
+        parser.parse(req.rtl)
+        return {"status": "success"}
+    except Exception as e:
+        # The error message from pyverilog usually contains line numbers like "line:4: before: endmodule"
+        return {"status": "error", "message": str(e)}
+
 @app.post("/analyze")
 def analyze_rtl(req: AnalyzeRequest):
     old_rtl = req.old_rtl
     new_rtl = req.new_rtl
 
-    # Get available testbenches
+    # Get available testbenches and their contents for better context
     tb_dir = os.path.join(os.path.dirname(__file__), "testbenches")
-    testbenches = []
+    testbench_context = {}
     if os.path.exists(tb_dir):
-        testbenches = [f for f in os.listdir(tb_dir) if f.endswith(('.v', '.sv'))]
+        for f in os.listdir(tb_dir):
+            if f.endswith(('.v', '.sv')):
+                with open(os.path.join(tb_dir, f), 'r') as tb_f:
+                    testbench_context[f] = tb_f.read()
 
     # If they are identical, we still might want an initial analysis of the current state
-    ai_result = ai_engine.generate_analysis(old_rtl, new_rtl, testbenches)
+    ai_result = ai_engine.generate_analysis(old_rtl, new_rtl, testbench_context)
     
     return {
         "status": "success", 
@@ -83,6 +144,21 @@ def analyze_rtl(req: AnalyzeRequest):
         "suggestions": ai_result.get("suggestions", []),
         "stale_testbenches": ai_result.get("stale_testbenches", [])
     }
+
+@app.post("/apply-fix")
+def apply_fix(req: ApplyFixRequest):
+    base_dir = os.path.dirname(__file__)
+    file_path = os.path.join(base_dir, req.path)
+    
+    if not os.path.exists(file_path):
+        return {"error": "File not found"}
+    
+    try:
+        with open(file_path, "w") as f:
+            f.write(req.fixed_code)
+        return {"status": "success"}
+    except Exception as e:
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

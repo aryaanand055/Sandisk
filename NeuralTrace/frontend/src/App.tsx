@@ -15,7 +15,7 @@ const API_URL = 'http://localhost:8000';
 
 function App() {
   const [files, setFiles] = useState<any[]>([]);
-  const [activeFile, setActiveFile] = useState('design.v');
+  const [activeFile, setActiveFile] = useState('led_blinker.v');
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
   
   const [baselineRtl, setBaselineRtl] = useState('');
@@ -31,12 +31,15 @@ function App() {
   const [history, setHistory] = useState<any[]>([
     { id: 'baseline', message: 'Initial Baseline', risk: 'Low', time: 'Recently', content: '' }
   ]);
+  const [syntaxErrors, setSyntaxErrors] = useState<{line: number, message: string}[]>([]);
+  const [isSyntaxValid, setIsSyntaxValid] = useState(false);
 
   const [showExplorer, setShowExplorer] = useState(true);
   const [showEvolution, setShowEvolution] = useState(true);
   const [showImpact, setShowImpact] = useState(true);
   const [maximizeImpact, setMaximizeImpact] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [analysisView, setAnalysisView] = useState(false);
 
   const handleAnalyze = useCallback(async (oldVal: string, newVal: string) => {
     setIsAnalyzing(true);
@@ -62,28 +65,124 @@ function App() {
         const res = await axios.get(`${API_URL}/files`);
         setFiles(res.data.files);
         
+        let initialDesignContent = '';
         // Initial load for all files
         for (const f of res.data.files) {
           const contentRes = await axios.get(`${API_URL}/file/${f.path}`);
           const content = contentRes.data.content;
           setFileContents(prev => ({ ...prev, [f.path]: content }));
-          if (f.path === 'design.v') {
+          if (f.path === 'led_blinker.v') {
+             initialDesignContent = content;
              setBaselineRtl(content);
              setWorkingRtl(content);
              setHistory([{ id: 'baseline', message: 'Initial Baseline', risk: 'Low', time: 'Recently', content: content }]);
           }
+        }
+
+        // Only one startup call for initial state (as requested)
+        if (initialDesignContent) {
+          handleAnalyze(initialDesignContent, initialDesignContent);
         }
       } catch (err) {
         console.error("Failed to load files", err);
       }
     };
     fetchFiles();
-  }, []); // Only run once on mount, no need to depend on handleAnalyze now
+  }, [handleAnalyze]); // Included handleAnalyze back to dependency for clarity
+
 
 
   const handleFileSelect = (path: string) => {
     setActiveFile(path);
   };
+
+  const handleNewFile = async (type: 'rtl' | 'testbench') => {
+    const name = prompt(`Enter ${type === 'rtl' ? 'RTL' : 'Testbench'} filename (with .v or .sv extension):`);
+    if (!name) return;
+    
+    try {
+      const res = await axios.post(`${API_URL}/files`, { name, type });
+      if (res.data.error) {
+        alert(res.data.error);
+        return;
+      }
+      
+      // Refresh file list
+      const filesRes = await axios.get(`${API_URL}/files`);
+      setFiles(filesRes.data.files);
+      
+      // Load new file content and set active
+      const contentRes = await axios.get(`${API_URL}/file/${res.data.path}`);
+      setFileContents(prev => ({ ...prev, [res.data.path]: contentRes.data.content }));
+      setActiveFile(res.data.path);
+      
+    } catch (err) {
+      console.error("Failed to create file", err);
+      alert("Failed to create file");
+    }
+  };
+
+  const handleRemoveFile = async (path: string) => {
+    if (path === 'design.v') return alert("Cannot delete main design file");
+    if (!confirm(`Are you sure you want to delete ${path}?`)) return;
+    
+    try {
+      const res = await axios.delete(`${API_URL}/file/${path}`);
+      if (res.data.error) {
+        alert(res.data.error);
+        return;
+      }
+      
+      // Refresh file list
+      const filesRes = await axios.get(`${API_URL}/files`);
+      setFiles(filesRes.data.files);
+      
+      // If deleted file was active, switch to design.v
+      if (activeFile === path) {
+        setActiveFile('design.v');
+      }
+      
+    } catch (err) {
+      console.error("Failed to delete file", err);
+      alert("Failed to delete file");
+    }
+  };
+
+  // Debounced Syntax Check
+  useEffect(() => {
+    if (activeFile !== 'led_blinker.v' && !activeFile.endsWith('.v') && !activeFile.endsWith('.sv')) {
+      setSyntaxErrors([]);
+      return;
+    }
+
+    const currentCode = activeFile === 'led_blinker.v' ? workingRtl : fileContents[activeFile];
+    if (!currentCode) return;
+
+    // Reset validity on change
+    setIsSyntaxValid(false);
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await axios.post(`${API_URL}/check-syntax`, { rtl: currentCode });
+        if (res.data.status === 'error') {
+          // Parse line number from "line:4: before: ..."
+          const match = res.data.message.match(/line:(\d+):/);
+          const line = match ? parseInt(match[1]) : 1;
+          setSyntaxErrors([{ line, message: res.data.message }]);
+          setIsSyntaxValid(false);
+        } else {
+          setSyntaxErrors([]);
+          setIsSyntaxValid(true);
+        }
+      } catch (err) {
+        console.error("Syntax check failed", err);
+        setIsSyntaxValid(false);
+      }
+    }, 400);
+
+
+    return () => clearTimeout(timer);
+  }, [workingRtl, fileContents, activeFile]);
 
   const handleCommit = async () => {
     if (!commitMessage.trim()) return alert("Enter a commit message");
@@ -111,6 +210,8 @@ function App() {
     setCommitMessage('');
     setDiffLeft(newCommitId);
     setShowConfirmModal(false);
+    setAnalysisView(true);
+    setShowImpact(true);
 
     // Trigger Groq analysis only once after the commit process has finalized
     const analysis = await handleAnalyze(oldRtl, newRtl);
@@ -123,6 +224,29 @@ function App() {
     }
   };
 
+
+  const handleApplyFix = async (fixedCode: string) => {
+    if (!fixedCode) return;
+    try {
+      const res = await axios.post(`${API_URL}/apply-fix`, {
+        path: activeFile,
+        fixed_code: fixedCode
+      });
+      if (res.data.status === 'success') {
+        if (activeFile === 'led_blinker.v') {
+          setWorkingRtl(fixedCode);
+        } else {
+          setFileContents(prev => ({ ...prev, [activeFile]: fixedCode }));
+        }
+        alert("Fix applied successfully!");
+      } else {
+        alert("Failed to apply fix: " + res.data.error);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error applying fix");
+    }
+  };
 
   const leftContent = diffLeft === 'working' ? workingRtl : (history.find(c => c.id === diffLeft)?.content || '');
   const rightContent = diffRight === 'working' ? workingRtl : (history.find(c => c.id === diffRight)?.content || '');
@@ -204,7 +328,7 @@ function App() {
                     </div>
                   </div>
                   <div className="flex-1 overflow-y-auto custom-scrollbar pt-2">
-                    <FileExplorer files={files} activeFile={activeFile} onFileSelect={handleFileSelect} />
+                    <FileExplorer files={files} activeFile={activeFile} onFileSelect={handleFileSelect} onNewFile={handleNewFile} onRemoveFile={handleRemoveFile} />
                   </div>
                 </div>
               )}
@@ -250,17 +374,33 @@ function App() {
                     <div className="flex w-full">
                       <button 
                         onClick={handleCommit}
-                        disabled={isAnalyzing}
-                        className="flex-1 flex items-center justify-center gap-2 bg-[#007acc] hover:bg-[#0062a3] text-white py-1.5 rounded-l text-[13px] transition-all disabled:opacity-50"
+                        disabled={isAnalyzing || !isSyntaxValid}
+                        className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-l text-[13px] transition-all opacity-100 ${
+                          (isAnalyzing || !isSyntaxValid) 
+                            ? 'bg-gray-600 text-gray-400 cursor-not-allowed' 
+                            : 'bg-[#007acc] hover:bg-[#0062a3] text-white shadow-[0_0_15px_rgba(0,122,204,0.3)]'
+                        }`}
                       >
-                        <Check size={16} /> {isAnalyzing ? 'Analyzing...' : 'Commit'}
+                        <Check size={16} /> 
+                        {isAnalyzing ? 'Analyzing...' : (!isSyntaxValid ? (syntaxErrors.length > 0 ? 'Fix Errors' : 'Verifying...') : 'Commit')}
                       </button>
                       <div className="w-[1px] bg-black/20 h-auto"></div>
-                      <button className="bg-[#007acc] hover:bg-[#0062a3] text-white px-2 rounded-r transition-all">
+                      <button className={`px-2 rounded-r transition-all ${
+                        (isAnalyzing || !isSyntaxValid) 
+                          ? 'bg-gray-600 text-gray-400 cursor-not-allowed' 
+                          : 'bg-[#007acc] hover:bg-[#0062a3] text-white'
+                      }`}>
                         <ChevronDown size={16} />
                       </button>
+
                     </div>
+                    {syntaxErrors.length > 0 && (
+                      <div className="mt-2 text-[10px] text-red-500 font-medium px-1 flex items-center gap-1">
+                        <AlertCircle size={10} /> Syntax errors must be resolved before committing.
+                      </div>
+                    )}
                   </div>
+
 
                   {/* Evolution Timeline (Graph Section) */}
                   {showEvolution && (
@@ -339,14 +479,28 @@ function App() {
                                <div>
                                   <h3 className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-2">Analysis Story</h3>
                                   <div className="space-y-2">
-                                     {(impactData.suggestions || []).map((s: string, i: number) => (
-                                        <div key={i} className="flex gap-2 p-2 bg-blue-500/5 rounded border border-blue-500/10">
-                                           <Sparkles size={12} className="text-blue-400 shrink-0 mt-0.5" />
-                                           <p className="text-[11px] leading-relaxed text-gray-300">
-                                              {s}
-                                           </p>
-                                        </div>
-                                     ))}
+                                     {impactData.suggestions.map((s: any, i: number) => {
+                                        const description = typeof s === 'string' ? s : s.description;
+                                        const fixedCode = typeof s === 'string' ? null : s.fixed_code;
+                                        return (
+                                          <div key={i} className="flex flex-col gap-2 p-2 bg-blue-500/5 rounded border border-blue-500/10">
+                                            <div className="flex gap-2">
+                                              <Sparkles size={12} className="text-blue-400 shrink-0 mt-0.5" />
+                                              <p className="text-[11px] leading-relaxed text-gray-300">
+                                                 {description}
+                                              </p>
+                                            </div>
+                                            {fixedCode && (
+                                              <button 
+                                                onClick={() => handleApplyFix(fixedCode)}
+                                                className="ml-5 self-start flex items-center gap-1 px-2 py-0.5 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 text-[10px] font-bold rounded border border-blue-500/30 transition-all"
+                                              >
+                                                Apply Fix
+                                              </button>
+                                            )}
+                                          </div>
+                                        );
+                                     })}
                                   </div>
                                </div>
                             </div>
@@ -363,7 +517,7 @@ function App() {
         
         {/* Center Panel - Editor */}
         <main className="flex-1 border-r border-[#333] flex flex-col relative bg-[#1e1e1e]">
-           {editorMode === 'diff' && activeFile === 'design.v' && (
+           {editorMode === 'diff' && activeFile === 'led_blinker.v' && (
              <div className="bg-[#252526] px-4 py-2 border-b border-[#333] flex items-center gap-4 text-sm z-20">
                <span className="text-gray-400 font-semibold text-xs uppercase tracking-widest">Compare</span>
                <select value={diffLeft} onChange={(e) => setDiffLeft(e.target.value)} className="bg-[#1e1e1e] border border-[#444] rounded text-gray-300 px-2 py-1 outline-none focus:border-blue-500 flex-1">
@@ -379,23 +533,24 @@ function App() {
            )}
 
            <div className="flex-1 relative">
-             {(!workingRtl && activeFile === 'design.v') ? (
-               <div className="flex items-center justify-center h-full text-gray-500 animate-pulse">Loading design.v...</div>
+             {(!workingRtl && activeFile === 'led_blinker.v') ? (
+               <div className="flex items-center justify-center h-full text-gray-500 animate-pulse">Loading led_blinker.v...</div>
              ) : (
-               <CodeEditor 
-                  original={activeFile === 'design.v' ? leftContent : ''} 
-                  modified={activeFile === 'design.v' ? (editorMode === 'edit' ? workingRtl : rightContent) : (fileContents[activeFile] || '')} 
-                  onChange={(val) => {
-                    const newVal = val || '';
-                    if (activeFile === 'design.v') {
-                      setWorkingRtl(newVal);
-                    } else {
-                      setFileContents({ ...fileContents, [activeFile]: newVal });
-                    }
-                  }}
-                  mode={activeFile === 'design.v' ? editorMode : 'edit'}
-                  path={activeFile}
-               />
+              <CodeEditor 
+                 original={activeFile === 'led_blinker.v' ? leftContent : ''} 
+                 modified={activeFile === 'led_blinker.v' ? (editorMode === 'edit' ? workingRtl : rightContent) : (fileContents[activeFile] || '')} 
+                 onChange={(val) => {
+                   const newVal = val || '';
+                   if (activeFile === 'led_blinker.v') {
+                     setWorkingRtl(newVal);
+                   } else {
+                     setFileContents({ ...fileContents, [activeFile]: newVal });
+                   }
+                 }}
+                 mode={activeFile === 'led_blinker.v' ? editorMode : 'edit'}
+                 path={activeFile}
+                 errors={syntaxErrors}
+              />
              )}
            </div>
            
@@ -415,27 +570,147 @@ function App() {
         
         {/* Right Panel - Impact Visualizer */}
         {showImpact && !maximizeImpact && (
-          <aside className="w-[450px] bg-[#252526] p-4 flex flex-col">
-            <div className="flex items-center justify-between mb-4">
+          <aside className="w-[450px] bg-[#252526] border-l border-[#333] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2 border-b border-[#333] bg-[#2d2d2d]">
               <div className="flex items-center gap-2">
-                <h2 className="text-[11px] font-bold uppercase tracking-widest text-[#858585]">Impact Graph</h2>
-                <div className="flex items-center gap-1">
-                  <button onClick={() => setMaximizeImpact(true)} className="hover:bg-white/10 p-1 rounded transition-all" title="Full Screen">
-                    <span className="text-[10px] text-gray-500">Maximize</span>
-                  </button>
-                  <button onClick={() => setShowImpact(false)} className="hover:bg-white/10 p-1 rounded transition-all" title="Close">
-                    <span className="text-[10px] text-gray-500">Minimize</span>
-                  </button>
-                </div>
+                <button 
+                  onClick={() => setAnalysisView(false)}
+                  className={`text-[11px] font-bold uppercase tracking-widest px-2 py-1 rounded transition-all ${!analysisView ? 'text-blue-400 bg-blue-400/10' : 'text-[#858585] hover:text-gray-300'}`}
+                >
+                  Graph
+                </button>
+                <div className="w-[1px] h-3 bg-[#444]"></div>
+                <button 
+                  onClick={() => setAnalysisView(true)}
+                  className={`text-[11px] font-bold uppercase tracking-widest px-2 py-1 rounded transition-all ${analysisView ? 'text-blue-400 bg-blue-400/10' : 'text-[#858585] hover:text-gray-300'}`}
+                >
+                  AI Analysis
+                </button>
               </div>
-              {impactData && (
-                <div className={`px-3 py-1 rounded-full text-[10px] font-bold border ${ impactData.risk === 'High' ? 'bg-red-500/10 border-red-500/50 text-red-500' : 'bg-green-500/10 border-green-500/50 text-green-500' } animate-pulse`}>
-                  {impactData.risk} Risk Detected
+              <div className="flex items-center gap-1">
+                <button onClick={() => setMaximizeImpact(true)} className="hover:bg-white/10 p-1 rounded transition-all" title="Full Screen">
+                  <MoreHorizontal size={14} className="text-gray-500" />
+                </button>
+                <button onClick={() => setShowImpact(false)} className="hover:bg-white/10 p-1 rounded transition-all" title="Close">
+                  <span className="text-[10px] text-gray-500">Hide</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+              {analysisView ? (
+                <div className="p-6 space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+                  {/* Assessment Header */}
+                  {impactData && (
+                    <div className={`p-4 rounded-xl border flex items-center justify-between ${
+                      impactData.risk === 'High' ? 'bg-red-500/10 border-red-500/20' : 'bg-green-500/10 border-green-500/20'
+                    }`}>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-widest text-gray-500 font-bold mb-1">Risk Assessment</p>
+                        <h3 className={`text-2xl font-bold ${
+                          impactData.risk === 'High' ? 'text-red-500' : 'text-green-500'
+                        }`}>{impactData.risk} Impact detected</h3>
+                      </div>
+                      <Sparkles size={32} className={impactData.risk === 'High' ? 'text-red-500/50' : 'text-green-500/50'} />
+                    </div>
+                  )}
+
+                  {!impactData && isAnalyzing && (
+                    <div className="flex flex-col items-center justify-center py-20 gap-4">
+                      <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                      <p className="text-sm text-gray-400">AI Engine analyzing changes...</p>
+                    </div>
+                  )}
+
+                  {impactData && (
+                    <>
+                      {/* Re-verification Section */}
+                      <section>
+                        <div className="flex items-center gap-2 mb-4">
+                          <RotateCcw size={18} className="text-yellow-500" />
+                          <h3 className="text-sm font-bold text-white uppercase tracking-wider">Mandatory RTL Re-Verification</h3>
+                        </div>
+                        <div className="grid gap-3">
+                          {impactData.stale_testbenches.length > 0 ? (
+                            impactData.stale_testbenches.map((tb: string, i: number) => (
+                              <div key={i} className="group flex items-center justify-between p-4 bg-[#2d2d2d] rounded-xl border border-yellow-500/20 hover:border-yellow-500/50 transition-all cursor-pointer">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 rounded-lg bg-yellow-500/10 flex items-center justify-center">
+                                    <Play size={20} className="text-yellow-500" />
+                                  </div>
+                                  <div>
+                                    <p className="text-sm font-semibold text-white">{tb}</p>
+                                    <p className="text-xs text-gray-500">Outdated • Requires Rerun</p>
+                                  </div>
+                                </div>
+                                <button className="opacity-0 group-hover:opacity-100 bg-yellow-500 text-black px-3 py-1 rounded text-xs font-bold transition-all">
+                                  RUN NOW
+                                </button>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="p-4 bg-green-500/5 rounded-xl border border-green-500/10 text-center">
+                              <Check className="mx-auto mb-2 text-green-500" size={24} />
+                              <p className="text-sm text-gray-400">All testbenches are up to date.</p>
+                            </div>
+                          )}
+                        </div>
+                      </section>
+
+                      {/* Analysis Story */}
+                      <section>
+                        <div className="flex items-center gap-2 mb-4">
+                          <Sparkles size={18} className="text-blue-400" />
+                          <h3 className="text-sm font-bold text-white uppercase tracking-wider">AI Analysis Story</h3>
+                        </div>
+                        <div className="space-y-3">
+                          {impactData.suggestions.map((s: any, i: number) => {
+                            const description = typeof s === 'string' ? s : s.description;
+                            const fixedCode = typeof s === 'string' ? null : s.fixed_code;
+                            return (
+                              <div key={i} className="flex flex-col gap-3 p-4 bg-blue-500/5 rounded-xl border border-blue-500/10 transition-all hover:bg-blue-500/10">
+                                <div className="flex gap-3">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-2 shrink-0"></div>
+                                  <p className="text-[13px] leading-relaxed text-gray-300">{description}</p>
+                                </div>
+                                {fixedCode && (
+                                  <button 
+                                    onClick={() => handleApplyFix(fixedCode)}
+                                    className="ml-5 self-start flex items-center gap-1.5 px-3 py-1 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 text-[11px] font-bold rounded border border-blue-500/30 transition-all"
+                                  >
+                                    <Check size={12} /> Apply Fix
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </section>
+
+                      {/* Impacted Signals */}
+                      <section>
+                        <div className="flex items-center gap-2 mb-4">
+                          <ArrowRightLeft size={18} className="text-purple-400" />
+                          <h3 className="text-sm font-bold text-white uppercase tracking-wider">Impacted Signals</h3>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {impactData.delta.changed_signals.map((sig: string, i: number) => (
+                            <span key={i} className="px-3 py-1 bg-purple-500/10 border border-purple-500/20 rounded-full text-[11px] text-purple-300 font-medium">
+                              {sig}
+                            </span>
+                          ))}
+                        </div>
+                      </section>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="h-full flex flex-col p-4">
+                   <div className="flex-1 rounded-xl border border-[#333] overflow-hidden bg-[#1e1e1e] shadow-inner relative">
+                    <ImpactGraph externalNodes={impactData?.impact_map?.nodes} externalEdges={impactData?.impact_map?.edges} />
+                  </div>
                 </div>
               )}
-            </div>
-            <div className="flex-1 rounded-xl border border-[#333] overflow-hidden bg-[#1e1e1e] shadow-inner relative">
-               <ImpactGraph externalNodes={impactData?.impact_map?.nodes} externalEdges={impactData?.impact_map?.edges} />
             </div>
           </aside>
         )}

@@ -13,7 +13,7 @@ class AIEngine:
                 api_key=api_key,
                 base_url="https://api.groq.com/openai/v1",
             )
-            self.model_name = 'openai/gpt-oss-20b'
+            self.model_name = 'llama-3.3-70b-versatile'
             self.enabled = True
         else:
             self.enabled = False
@@ -45,7 +45,7 @@ class AIEngine:
         {new_rtl}
         ```
         
-        ### AVAILABLE TESTBENCHES ###
+        ### AVAILABLE TESTBENCHES (Filename -> Content Mapping) ###
         {testbenches}
 
         ### TASK ###
@@ -57,10 +57,12 @@ class AIEngine:
         3. Assess the risk level of this change (High, Medium, or Low) based on verification impact.
         4. Provide exactly 3 specific, actionable verification suggestions.
         5. Identify which of the available testbenches MUST be run again due to the changes.
-           - Be conservative: if a module is changed, any testbench that uses that module or its hierarchies must be rerun.
-           - If a signal name is changed, all testbenches that monitor it or rely on it for assertions must be rerun.
+           - If a core logic block (always block) or state machine is changed, most testbenches using that module probably need to rerun.
+           - If a DEFAULT PARAMETER is changed, only testbenches that rely on the default value (i.e. DO NOT override that parameter) should be marked as stale.
+           - If a LOCALPARAM or INTERNAL SIGNAL is changed, focus on testbenches that monitor that specific functionality.
+           - If a change is purely whitespace or comments, no testbenches should be marked as stale.
         
-        Return strictly a valid JSON object matching this schema:
+        Return strictly a valid JSON object matching this schema. The "fixed_code" field for each suggestion must contain the FULL updated content of the code with the suggested fix applied.
         {{
           "delta": {{
               "modified_modules": ["module1"],
@@ -81,21 +83,32 @@ class AIEngine:
               ]
           }},
           "risk": "Medium",
-          "suggestions": ["suggestion 1", "suggestion 2", "suggestion 3"],
+          "suggestions": [
+            {{"description": "suggestion 1", "fixed_code": "modified verilog code..."}},
+            {{"description": "suggestion 2", "fixed_code": "modified verilog code..."}},
+            {{"description": "suggestion 3", "fixed_code": "modified verilog code..."}}
+          ],
           "stale_testbenches": ["tb_filename1.v"]
         }}
         """
         
         try:
-            response = self.client.responses.create(
+            response = self.client.chat.completions.create(
                 model=self.model_name,
-                input=prompt
+                messages=[
+                    {"role": "system", "content": "You are an RTL Verification Expert AI. Returen strictly a valid JSON object."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"}
             )
             import json
             import re
             
-            raw_text = response.output_text
+            raw_text = response.choices[0].message.content
             
+            if not raw_text:
+                raise ValueError("Empty response from AI")
+
             # Clean up potential markdown formatting that might be injected
             raw_text = re.sub(r'^```json\s*', '', raw_text.strip(), flags=re.IGNORECASE)
             raw_text = re.sub(r'\s*```$', '', raw_text.strip())
