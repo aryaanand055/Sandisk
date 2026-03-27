@@ -249,12 +249,15 @@ function App() {
   };
 
   const handleConnectZybo = async () => {
-    const currentCode = activeFile === 'clk_divider.v' ? workingRtl : fileContents[activeFile];
-    if (!currentCode) return alert("Open a file to connect to Zybo");
-
-    setIsAnalyzing(true); // Reusing analyzing state for loading UI
+    // Use the latest AI analysis data for the affected modules
+    const affectedModules = impactData?.delta?.modified_modules || [];
+    
+    setIsAnalyzing(true);
     try {
-      const res = await axios.post(`${API_URL}/connect-zybo`, { rtl: currentCode });
+      const res = await axios.post(`${API_URL}/connect-zybo`, { 
+        affected_modules: affectedModules,
+        testbenches: {} // In the future, this can be mapped from our file explorer state
+      });
       if (res.data.status === 'success') {
         alert("Zybo Connection Success:\n" + res.data.output);
       } else {

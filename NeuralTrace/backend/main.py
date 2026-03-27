@@ -33,6 +33,10 @@ class ApplyFixRequest(BaseModel):
     path: str
     fixed_code: str
 
+class ZyboRequest(BaseModel):
+    affected_modules: list
+    testbenches: dict = {}
+
 @app.get("/")
 def read_root():
     return {"message": "Neural Trace API is running"}
@@ -162,17 +166,42 @@ def apply_fix(req: ApplyFixRequest):
         return {"error": str(e)}
 
 @app.post("/connect-zybo")
-def connect_zybo(req: SyntaxCheckRequest):
+def connect_zybo(req: ZyboRequest):
     """
-    Writes the provided RTL to a temporary file and executes a 
-    connection script located on the user's Desktop.
+    Aggregates project files and analysis into a single JSON file
+    and executes the connection script on the Desktop.
     """
-    rtl_content = req.rtl
-    # Desktop path detection for Windows
+    base_dir = os.path.dirname(__file__)
+    
+    # 1. Gather all files (RTL and Testbenches)
+    all_files = {}
+    
+    # Root RTL files
+    for f in os.listdir(base_dir):
+        if f.endswith(('.v', '.sv')) and os.path.isfile(os.path.join(base_dir, f)):
+            with open(os.path.join(base_dir, f), 'r') as file_ref:
+                all_files[f] = file_ref.read()
+    
+    # Testbench files
+    tb_dir = os.path.join(base_dir, "testbenches")
+    if os.path.exists(tb_dir):
+        for f in os.listdir(tb_dir):
+            if f.endswith(('.v', '.sv')):
+                with open(os.path.join(tb_dir, f), 'r') as file_ref:
+                    all_files[f] = file_ref.read()
+
+    # 2. Construct the single JSON object
+    payload = {
+        "affected_modules": req.affected_modules,
+        "files": all_files,
+        "testbenches": req.testbenches
+    }
+
+    # 3. Path detection for script and task file
     desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-    # Using a placeholder name - the user can rename their file to match or specify the name
     script_name = "zybo_connect.py" 
     script_path = os.path.join(desktop_path, script_name)
+    json_task_path = os.path.join(desktop_path, "zybo_task.json")
 
     if not os.path.exists(script_path):
         return {
@@ -180,14 +209,14 @@ def connect_zybo(req: SyntaxCheckRequest):
             "status": "error"
         }
 
-    # Save to a temporary file for the script to handle
-    tmp_path = os.path.join(os.path.dirname(__file__), "current_zybo_rtl.v")
-    with open(tmp_path, "w") as f:
-        f.write(rtl_content)
+    # 4. Save the JSON payload to the Desktop (or a temp dir, but user asked for one JSON file to be sent)
+    import json
+    with open(json_task_path, "w") as f:
+        json.dump(payload, f, indent=2)
 
     try:
-        # Execute the desktop script, passing the path to the RTL file
-        result = subprocess.run(["python", script_path, tmp_path], capture_output=True, text=True, timeout=30)
+        # Execute the desktop script, passing the path to the JSON file
+        result = subprocess.run(["python", script_path, json_task_path], capture_output=True, text=True, timeout=30)
         return {
             "status": "success",
             "output": result.stdout,
