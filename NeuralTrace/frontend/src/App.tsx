@@ -11,7 +11,7 @@ import VersionTimeline from './components/VersionTimeline';
 import FileExplorer from './components/FileExplorer';
 import ConfirmationModal from './components/ConfirmationModal';
 
-const API_URL = 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
   const [files, setFiles] = useState<any[]>([]);

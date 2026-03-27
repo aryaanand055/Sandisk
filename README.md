@@ -7,7 +7,7 @@ Neural Trace is an advanced, AI-assisted RTL (Register Transfer Level) verificat
 - **Real-time RTL Editing:** Integrated powerful, VS Code-like editor utilizing Monaco Editor.
 - **Git-like Version Control & Commits:** Track codebase states over time with an intuitive evolution timeline.
 - **Diff Analysis:** Compare any two commits or your current working copy against a baseline.
-- **AI-Driven Impact Analysis:** Powered by Google Gemini via an optimized FastAPI backend. Automatically analyzes `old_rtl` versus `new_rtl` to identify modified modules, signals, and code blocks.
+- **AI-Driven Impact Analysis:** Powered by Groq AI (via Llama 3) through an optimized FastAPI backend. Automatically analyzes `old_rtl` versus `new_rtl` to identify modified modules, signals, and code blocks.
 - **Dynamic Dependency Graphs:** Automatically visualizes impact mapping and data flow implications using React Flow and Dagre.
 - **Intelligent Verification Suggestions:** Provides risk assessments and tailored verification scoping based on localized code changes.
 
@@ -23,7 +23,7 @@ Neural Trace is an advanced, AI-assisted RTL (Register Transfer Level) verificat
 **Backend**
 - **Framework:** FastAPI
 - **Language:** Python
-- **AI Integration:** Google Gemini (via `core.ai`)
+- **AI Integration:** Groq API (via `core.ai`)
 - **Server:** Uvicorn
 
 ## 📂 Project Structure
@@ -72,7 +72,7 @@ NeuralTrace/
    ```bash
    uvicorn main:app --reload
    ```
-   The backend will start at `http://localhost:8000`.
+   The backend will start at `http://localhost:8000` (Development) or `https://sandisk.onrender.com/` (Production).
 
 ### Frontend Setup
 
