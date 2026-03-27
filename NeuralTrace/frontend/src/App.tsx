@@ -15,7 +15,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function App() {
   const [files, setFiles] = useState<any[]>([]);
-  const [activeFile, setActiveFile] = useState('led_blinker.v');
+  const [activeFile, setActiveFile] = useState('clk_divider.v');
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
   
   const [baselineRtl, setBaselineRtl] = useState('');
@@ -71,7 +71,7 @@ function App() {
           const contentRes = await axios.get(`${API_URL}/file/${f.path}`);
           const content = contentRes.data.content;
           setFileContents(prev => ({ ...prev, [f.path]: content }));
-          if (f.path === 'led_blinker.v') {
+          if (f.path === 'clk_divider.v') {
              initialDesignContent = content;
              setBaselineRtl(content);
              setWorkingRtl(content);
@@ -150,12 +150,12 @@ function App() {
 
   // Debounced Syntax Check
   useEffect(() => {
-    if (activeFile !== 'led_blinker.v' && !activeFile.endsWith('.v') && !activeFile.endsWith('.sv')) {
+    if (activeFile !== 'clk_divider.v' && !activeFile.endsWith('.v') && !activeFile.endsWith('.sv')) {
       setSyntaxErrors([]);
       return;
     }
 
-    const currentCode = activeFile === 'led_blinker.v' ? workingRtl : fileContents[activeFile];
+    const currentCode = activeFile === 'clk_divider.v' ? workingRtl : fileContents[activeFile];
     if (!currentCode) return;
 
     // Reset validity on change
@@ -533,12 +533,12 @@ function App() {
            )}
 
            <div className="flex-1 relative">
-             {(!workingRtl && activeFile === 'led_blinker.v') ? (
-               <div className="flex items-center justify-center h-full text-gray-500 animate-pulse">Loading led_blinker.v...</div>
+             {(!workingRtl && activeFile === 'clk_divider.v') ? (
+               <div className="flex items-center justify-center h-full text-gray-500 animate-pulse">Loading clk_divider.v...</div>
              ) : (
               <CodeEditor 
-                 original={activeFile === 'led_blinker.v' ? leftContent : ''} 
-                 modified={activeFile === 'led_blinker.v' ? (editorMode === 'edit' ? workingRtl : rightContent) : (fileContents[activeFile] || '')} 
+                 original={activeFile === 'clk_divider.v' ? leftContent : ''} 
+                 modified={activeFile === 'clk_divider.v' ? (editorMode === 'edit' ? workingRtl : rightContent) : (fileContents[activeFile] || '')} 
                  onChange={(val) => {
                    const newVal = val || '';
                    if (activeFile === 'led_blinker.v') {

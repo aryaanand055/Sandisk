@@ -82,9 +82,9 @@ def list_all_files():
         if f.endswith(('.v', '.sv')) and os.path.isfile(os.path.join(base_dir, f)):
             files.append({"name": f, "path": f, "type": "rtl"})
     
-    # Ensure led_blinker.v is there if present
-    if not any(f["path"] == "led_blinker.v" for f in files) and os.path.exists(os.path.join(base_dir, "led_blinker.v")):
-        files.insert(0, {"name": "led_blinker.v", "path": "led_blinker.v", "type": "rtl"})
+    # Ensure clk_divider.v is there if present
+    if not any(f["path"] == "clk_divider.v" for f in files) and os.path.exists(os.path.join(base_dir, "clk_divider.v")):
+        files.insert(0, {"name": "clk_divider.v", "path": "clk_divider.v", "type": "rtl"})
 
     # 2. Testbenches
     tb_dir = os.path.join(base_dir, "testbenches")
