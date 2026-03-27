@@ -6,14 +6,15 @@ interface CodeEditorProps {
   modified: string;
   onChange?: (value: string | undefined) => void;
   mode: 'edit' | 'diff';
+  path: string;
 }
 
-const CodeEditor: React.FC<CodeEditorProps> = ({ original, modified, onChange, mode }) => {
+const CodeEditor: React.FC<CodeEditorProps> = ({ original, modified, onChange, mode, path }) => {
   return (
     <div className="w-full h-full flex flex-col">
       {mode === 'diff' ? (
         <DiffEditor
-          key="diff-view"
+          key={`diff-${path}`}
           original={original}
           modified={modified}
           language="verilog"
@@ -27,8 +28,9 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ original, modified, onChange, m
         />
       ) : (
         <Editor
-          key="edit-view"
-          defaultValue={modified}
+          key={`edit-${path}`}
+          path={path}
+          value={modified}
           onChange={onChange}
           language="verilog"
           theme="vs-dark"
