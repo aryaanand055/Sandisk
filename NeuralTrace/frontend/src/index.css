@@ -16,3 +16,8 @@ html, body, #root {
 .animate-in { animation-duration: 200ms; animation-fill-mode: both; }
 .fade-in { animation-name: fadeIn; }
 .zoom-in-95 { animation-name: zoomIn; }
+
+.graph-selected-line {
+  background-color: rgba(59, 130, 246, 0.2);
+  border-left: 2px solid rgba(59, 130, 246, 0.9);
+}

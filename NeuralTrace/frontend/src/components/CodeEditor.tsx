@@ -8,11 +8,23 @@ interface CodeEditorProps {
   mode: 'edit' | 'diff';
   path: string;
   errors?: {line: number, message: string}[];
+  highlightLine?: number;
+  highlightToken?: number;
 }
 
-const CodeEditor: React.FC<CodeEditorProps> = ({ original, modified, onChange, mode, path, errors = [] }) => {
+const CodeEditor: React.FC<CodeEditorProps> = ({
+  original,
+  modified,
+  onChange,
+  mode,
+  path,
+  errors = [],
+  highlightLine,
+  highlightToken
+}) => {
   const editorRef = React.useRef<any>(null);
   const monacoRef = React.useRef<any>(null);
+  const decorationIdsRef = React.useRef<string[]>([]);
 
   const handleEditorDidMount = (editor: any, monaco: any) => {
     editorRef.current = editor;
@@ -35,6 +47,33 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ original, modified, onChange, m
       }
     }
   }, [errors]);
+
+  React.useEffect(() => {
+    if (mode !== 'edit' || !editorRef.current || !monacoRef.current || !highlightLine) {
+      return;
+    }
+
+    const model = editorRef.current.getModel();
+    if (!model) return;
+
+    const maxLines = model.getLineCount();
+    const line = Math.max(1, Math.min(highlightLine, maxLines));
+    const range = new monacoRef.current.Range(line, 1, line, model.getLineMaxColumn(line));
+
+    decorationIdsRef.current = editorRef.current.deltaDecorations(decorationIdsRef.current, [
+      {
+        range,
+        options: {
+          isWholeLine: true,
+          className: 'graph-selected-line'
+        }
+      }
+    ]);
+
+    editorRef.current.revealLineInCenter(line);
+    editorRef.current.setPosition({ lineNumber: line, column: 1 });
+    editorRef.current.focus();
+  }, [highlightLine, highlightToken, mode, path]);
 
   return (
     <div className="w-full h-full flex flex-col">

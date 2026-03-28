@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { 
   GitBranch, GitCommit, Play, FileCode, ArrowRightLeft, 
@@ -7,15 +7,24 @@ import {
 } from 'lucide-react';
 import CodeEditor from './components/CodeEditor';
 import ImpactGraph from './components/ImpactGraph';
+import ImpactGraphEnhanced from './components/ImpactGraphEnhanced';
 import VersionTimeline from './components/VersionTimeline';
 import FileExplorer from './components/FileExplorer';
 import ConfirmationModal from './components/ConfirmationModal';
+import { graphAPIService } from './services/graphAPI';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const DEFAULT_MODULE_FILE = 'motor_top.v';
 
 function App() {
+  const MIN_CENTER_WIDTH = 420;
+  const MIN_LEFT_PANEL_WIDTH = 240;
+  const MIN_RIGHT_PANEL_WIDTH = 320;
+  const MIN_EXPLORER_HEIGHT = 140;
+  const MIN_SOURCE_CONTROL_HEIGHT = 240;
+
   const [files, setFiles] = useState<any[]>([]);
-  const [activeFile, setActiveFile] = useState('clk_divider.v');
+  const [activeFile, setActiveFile] = useState(DEFAULT_MODULE_FILE);
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
   
   const [baselineRtl, setBaselineRtl] = useState('');
@@ -41,6 +50,52 @@ function App() {
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [analysisView, setAnalysisView] = useState(false);
 
+  const [leftPanelWidth, setLeftPanelWidth] = useState(320);
+  const [rightPanelWidth, setRightPanelWidth] = useState(450);
+  const [explorerHeight, setExplorerHeight] = useState(260);
+
+  const layoutRef = useRef<HTMLDivElement | null>(null);
+  const leftSidebarContentRef = useRef<HTMLDivElement | null>(null);
+
+  // State for full codebase graph visualization
+  const [fullGraphData, setFullGraphData] = useState<any>(null);
+  const [currentGraphCommit, setCurrentGraphCommit] = useState<string | null>(null);
+  const [changeHighlighting, setChangeHighlighting] = useState<any>(null);
+  const [isGeneratingGraph, setIsGeneratingGraph] = useState(false);
+  const [editorHighlight, setEditorHighlight] = useState<{line: number; token: number} | null>(null);
+
+  const resolveGraphFilePath = useCallback((graphFile?: string, moduleName?: string) => {
+    if (!graphFile || files.length === 0) {
+      if (moduleName) {
+        const moduleCandidate = `${moduleName}.v`;
+        const fallbackByModule = files.find((f) => f.path === moduleCandidate || f.name === moduleCandidate);
+        if (fallbackByModule) return fallbackByModule.path;
+      }
+      return undefined;
+    }
+
+    const normalized = graphFile.replace(/\\/g, '/');
+    const exact = files.find((f) => f.path === normalized);
+    if (exact) return exact.path;
+
+    const basename = normalized.split('/').pop();
+    const byName = files.find((f) => f.name === basename || f.path.endsWith(`/${basename}`));
+    if (byName) return byName.path;
+
+    return undefined;
+  }, [files]);
+
+  const handleGraphNodeSelect = useCallback((node: { id: string; file?: string; line?: number; module?: string }) => {
+    const resolvedPath = resolveGraphFilePath(node.file, node.module);
+    if (resolvedPath) {
+      setActiveFile(resolvedPath);
+      setEditorMode('edit');
+    }
+
+    const line = typeof node.line === 'number' && node.line > 0 ? node.line : 1;
+    setEditorHighlight({ line, token: Date.now() });
+  }, [resolveGraphFilePath]);
+
   const handleAnalyze = useCallback(async (oldVal: string, newVal: string) => {
     setIsAnalyzing(true);
     try {
@@ -58,6 +113,42 @@ function App() {
     }
   }, []);
 
+  // Generate full codebase dependency graph
+  const handleGenerateFullGraph = useCallback(async () => {
+    setIsGeneratingGraph(true);
+    try {
+      const data = await graphAPIService.generateFullGraph();
+      if (data.status === 'success' || data.status === 'empty') {
+        setFullGraphData(data.graph);
+        setCurrentGraphCommit(data.commit_id);
+        console.log(`Generated full graph with ${data.graph.node_count} nodes and ${data.graph.edge_count} edges`);
+      } else {
+        console.error('Failed to generate graph:', data);
+      }
+    } catch (err) {
+      console.error('Error generating full graph:', err);
+    } finally {
+      setIsGeneratingGraph(false);
+    }
+  }, []);
+
+  // Compare snapshots to highlight changes
+  const handleCompareSnapshots = useCallback(async (oldCommitId: string, newCommitId: string) => {
+    try {
+      const data = await graphAPIService.getChanges(oldCommitId, newCommitId);
+      if (data.status === 'success') {
+        const highlighting = graphAPIService.formatChangeHighlighting(
+          data.delta,
+          data.impact_analysis
+        );
+        setChangeHighlighting(highlighting);
+        console.log('Changes highlighted:', highlighting);
+      }
+    } catch (err) {
+      console.error('Error comparing snapshots:', err);
+    }
+  }, []);
+
   // Fetch file list
   useEffect(() => {
     const fetchFiles = async () => {
@@ -71,7 +162,7 @@ function App() {
           const contentRes = await axios.get(`${API_URL}/file/${f.path}`);
           const content = contentRes.data.content;
           setFileContents(prev => ({ ...prev, [f.path]: content }));
-          if (f.path === 'clk_divider.v') {
+          if (f.path === DEFAULT_MODULE_FILE) {
              initialDesignContent = content;
              setBaselineRtl(content);
              setWorkingRtl(content);
@@ -92,7 +183,14 @@ function App() {
 
 
 
-  const handleFileSelect = (path: string) => {
+  const handleFileSelect = async (path: string) => {
+    try {
+      const contentRes = await axios.get(`${API_URL}/file/${path}`);
+      const content = contentRes.data?.content ?? '';
+      setFileContents(prev => ({ ...prev, [path]: content }));
+    } catch (err) {
+      console.error(`Failed to load file ${path}`, err);
+    }
     setActiveFile(path);
   };
 
@@ -137,9 +235,9 @@ function App() {
       const filesRes = await axios.get(`${API_URL}/files`);
       setFiles(filesRes.data.files);
       
-      // If deleted file was active, switch to design.v
+      // If deleted file was active, switch back to the default module
       if (activeFile === path) {
-        setActiveFile('design.v');
+        setActiveFile(DEFAULT_MODULE_FILE);
       }
       
     } catch (err) {
@@ -150,12 +248,12 @@ function App() {
 
   // Debounced Syntax Check
   useEffect(() => {
-    if (activeFile !== 'clk_divider.v' && !activeFile.endsWith('.v') && !activeFile.endsWith('.sv')) {
+    if (activeFile !== DEFAULT_MODULE_FILE && !activeFile.endsWith('.v') && !activeFile.endsWith('.sv')) {
       setSyntaxErrors([]);
       return;
     }
 
-    const currentCode = activeFile === 'clk_divider.v' ? workingRtl : fileContents[activeFile];
+    const currentCode = activeFile === DEFAULT_MODULE_FILE ? workingRtl : fileContents[activeFile];
     if (!currentCode) return;
 
     // Reset validity on change
@@ -233,7 +331,7 @@ function App() {
         fixed_code: fixedCode
       });
       if (res.data.status === 'success') {
-        if (activeFile === 'led_blinker.v') {
+        if (activeFile === DEFAULT_MODULE_FILE) {
           setWorkingRtl(fixedCode);
         } else {
           setFileContents(prev => ({ ...prev, [activeFile]: fixedCode }));
@@ -273,6 +371,76 @@ function App() {
 
   const leftContent = diffLeft === 'working' ? workingRtl : (history.find(c => c.id === diffLeft)?.content || '');
   const rightContent = diffRight === 'working' ? workingRtl : (history.find(c => c.id === diffRight)?.content || '');
+
+  const clamp = (value: number, min: number, max: number) => {
+    if (max < min) return min;
+    return Math.min(Math.max(value, min), max);
+  };
+
+  const startLeftResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = leftPanelWidth;
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const rootWidth = layoutRef.current?.getBoundingClientRect().width || 0;
+      const currentRightWidth = (showImpact && !maximizeImpact) ? rightPanelWidth : 0;
+      const maxLeft = rootWidth - currentRightWidth - MIN_CENTER_WIDTH - 8;
+      const nextWidth = clamp(startWidth + (moveEvent.clientX - startX), MIN_LEFT_PANEL_WIDTH, maxLeft);
+      setLeftPanelWidth(nextWidth);
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
+
+  const startRightResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = rightPanelWidth;
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const rootWidth = layoutRef.current?.getBoundingClientRect().width || 0;
+      const currentLeftWidth = (showExplorer || showEvolution) ? leftPanelWidth : 0;
+      const maxRight = rootWidth - currentLeftWidth - MIN_CENTER_WIDTH - 8;
+      const nextWidth = clamp(startWidth - (moveEvent.clientX - startX), MIN_RIGHT_PANEL_WIDTH, maxRight);
+      setRightPanelWidth(nextWidth);
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
+
+  const startExplorerResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = explorerHeight;
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const containerHeight = leftSidebarContentRef.current?.getBoundingClientRect().height || 0;
+      const maxExplorer = containerHeight - MIN_SOURCE_CONTROL_HEIGHT - 8;
+      const nextHeight = clamp(startHeight + (moveEvent.clientY - startY), MIN_EXPLORER_HEIGHT, maxExplorer);
+      setExplorerHeight(nextHeight);
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
 
   return (
     <div className="flex h-screen w-full flex-col bg-[#1e1e1e] text-[#d4d4d4]">
@@ -343,15 +511,18 @@ function App() {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div ref={layoutRef} className="flex flex-1 overflow-hidden">
         {/* Left Sidebar - VS Code Style */}
         {(showExplorer || showEvolution) && (
-          <aside className="w-80 border-r border-[#333] bg-[#252526] flex flex-col select-none">
-            <div className="flex-1 flex flex-col overflow-hidden">
+          <aside
+            className="shrink-0 border-r border-[#333] bg-[#252526] flex flex-col select-none"
+            style={{ width: leftPanelWidth }}
+          >
+            <div ref={leftSidebarContentRef} className="flex-1 flex flex-col overflow-hidden">
               
               {/* Explorer Section */}
               {showExplorer && (
-                <div className={`${showEvolution ? 'h-2/5' : 'flex-1'} flex flex-col min-h-0`}>
+                <div className="flex flex-col min-h-0" style={{ height: explorerHeight }}>
                   <div className="px-4 py-2 border-b border-[#333] flex items-center justify-between bg-[#252526] sticky top-0 z-10 group cursor-pointer hover:bg-[#2a2d2e]" onClick={() => {}}>
                     <div className="flex items-center gap-1">
                       <ChevronDown size={14} className="text-gray-400" />
@@ -368,6 +539,14 @@ function App() {
                     <FileExplorer files={files} activeFile={activeFile} onFileSelect={handleFileSelect} onNewFile={handleNewFile} onRemoveFile={handleRemoveFile} />
                   </div>
                 </div>
+              )}
+
+              {showExplorer && (
+                <div
+                  className="h-1 cursor-row-resize bg-[#2d2d2d] hover:bg-blue-500/40 transition-colors"
+                  onPointerDown={startExplorerResize}
+                  title="Drag to resize explorer"
+                />
               )}
 
               {/* Source Control / Evolution Section */}
@@ -528,12 +707,20 @@ function App() {
                                               </p>
                                             </div>
                                             {fixedCode && (
-                                              <button 
-                                                onClick={() => handleApplyFix(fixedCode)}
-                                                className="ml-5 self-start flex items-center gap-1 px-2 py-0.5 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 text-[10px] font-bold rounded border border-blue-500/30 transition-all"
-                                              >
-                                                Apply Fix
-                                              </button>
+                                              <>
+                                                <button 
+                                                  onClick={() => handleApplyFix(fixedCode)}
+                                                  className="ml-5 self-start flex items-center gap-1 px-2 py-0.5 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 text-[10px] font-bold rounded border border-blue-500/30 transition-all"
+                                                >
+                                                  Apply Fix
+                                                </button>
+                                                <ImpactGraphEnhanced
+                                                  fullGraphData={fullGraphData}
+                                                  changeHighlighting={changeHighlighting}
+                                                  onGenerateFullGraph={handleGenerateFullGraph}
+                                                  onNodeSelect={handleGraphNodeSelect}
+                                                />
+                                              </>
                                             )}
                                           </div>
                                         );
@@ -551,10 +738,18 @@ function App() {
             </div>
           </aside>
         )}
+
+        {(showExplorer || showEvolution) && (
+          <div
+            className="w-1 shrink-0 cursor-col-resize bg-[#2d2d2d] hover:bg-blue-500/40 transition-colors"
+            onPointerDown={startLeftResize}
+            title="Drag to resize sidebar"
+          />
+        )}
         
         {/* Center Panel - Editor */}
         <main className="flex-1 border-r border-[#333] flex flex-col relative bg-[#1e1e1e]">
-           {editorMode === 'diff' && activeFile === 'led_blinker.v' && (
+           {editorMode === 'diff' && activeFile === DEFAULT_MODULE_FILE && (
              <div className="bg-[#252526] px-4 py-2 border-b border-[#333] flex items-center gap-4 text-sm z-20">
                <span className="text-gray-400 font-semibold text-xs uppercase tracking-widest">Compare</span>
                <select value={diffLeft} onChange={(e) => setDiffLeft(e.target.value)} className="bg-[#1e1e1e] border border-[#444] rounded text-gray-300 px-2 py-1 outline-none focus:border-blue-500 flex-1">
@@ -570,23 +765,25 @@ function App() {
            )}
 
            <div className="flex-1 relative">
-             {(!workingRtl && activeFile === 'clk_divider.v') ? (
-               <div className="flex items-center justify-center h-full text-gray-500 animate-pulse">Loading clk_divider.v...</div>
+             {(!workingRtl && activeFile === DEFAULT_MODULE_FILE) ? (
+               <div className="flex items-center justify-center h-full text-gray-500 animate-pulse">Loading {DEFAULT_MODULE_FILE}...</div>
              ) : (
               <CodeEditor 
-                 original={activeFile === 'clk_divider.v' ? leftContent : ''} 
-                 modified={activeFile === 'clk_divider.v' ? (editorMode === 'edit' ? workingRtl : rightContent) : (fileContents[activeFile] || '')} 
+                 original={activeFile === DEFAULT_MODULE_FILE ? leftContent : ''} 
+                 modified={activeFile === DEFAULT_MODULE_FILE ? (editorMode === 'edit' ? workingRtl : rightContent) : (fileContents[activeFile] || '')} 
                  onChange={(val) => {
                    const newVal = val || '';
-                   if (activeFile === 'led_blinker.v') {
+                   if (activeFile === DEFAULT_MODULE_FILE) {
                      setWorkingRtl(newVal);
                    } else {
                      setFileContents({ ...fileContents, [activeFile]: newVal });
                    }
                  }}
-                 mode={activeFile === 'led_blinker.v' ? editorMode : 'edit'}
+                 mode={activeFile === DEFAULT_MODULE_FILE ? editorMode : 'edit'}
                  path={activeFile}
                  errors={syntaxErrors}
+                 highlightLine={editorHighlight?.line}
+                 highlightToken={editorHighlight?.token}
               />
              )}
            </div>
@@ -604,10 +801,18 @@ function App() {
               </div>
            </div>
         </main>
+
+        {showImpact && !maximizeImpact && (
+          <div
+            className="w-1 shrink-0 cursor-col-resize bg-[#2d2d2d] hover:bg-blue-500/40 transition-colors"
+            onPointerDown={startRightResize}
+            title="Drag to resize impact panel"
+          />
+        )}
         
         {/* Right Panel - Impact Visualizer */}
         {showImpact && !maximizeImpact && (
-          <aside className="w-[450px] bg-[#252526] border-l border-[#333] flex flex-col overflow-hidden">
+          <aside className="shrink-0 bg-[#252526] border-l border-[#333] flex flex-col overflow-hidden" style={{ width: rightPanelWidth }}>
             <div className="flex items-center justify-between px-4 py-2 border-b border-[#333] bg-[#2d2d2d]">
               <div className="flex items-center gap-2">
                 <button 
@@ -744,14 +949,32 @@ function App() {
               ) : (
                 <div className="h-full flex flex-col p-4">
                    <div className="flex-1 rounded-xl border border-[#333] overflow-hidden bg-[#1e1e1e] shadow-inner relative">
-                    <ImpactGraph externalNodes={impactData?.impact_map?.nodes} externalEdges={impactData?.impact_map?.edges} />
+                    <ImpactGraphEnhanced
+                      fullGraphData={fullGraphData}
+                      externalNodes={impactData?.impact_map?.nodes}
+                      externalEdges={impactData?.impact_map?.edges}
+                      changeHighlighting={changeHighlighting}
+                      onGenerateFullGraph={handleGenerateFullGraph}
+                      onNodeSelect={handleGraphNodeSelect}
+                    />
                   </div>
                 </div>
               )}
             </div>
           </aside>
         )}
+
       </div>
+
+      {!showImpact && !maximizeImpact && (
+        <button
+          onClick={() => setShowImpact(true)}
+          className="fixed right-4 top-20 z-40 px-3 py-2 rounded border border-[#444] bg-[#2d2d2d] text-[11px] font-bold uppercase tracking-widest text-blue-300 hover:text-white hover:bg-[#3a3a3a] transition-all shadow-lg"
+          title="Show impact panel"
+        >
+          Show Graph
+        </button>
+      )}
 
       {/* Full Screen Impact Graph Modal/Overlay */}
       {maximizeImpact && (
@@ -773,7 +996,14 @@ function App() {
               </button>
            </div>
            <div className="flex-1 rounded-2xl border border-[#333] overflow-hidden bg-black/40 shadow-2xl relative">
-              <ImpactGraph externalNodes={impactData?.impact_map?.nodes} externalEdges={impactData?.impact_map?.edges} />
+              <ImpactGraphEnhanced
+               fullGraphData={fullGraphData}
+               externalNodes={impactData?.impact_map?.nodes}
+               externalEdges={impactData?.impact_map?.edges}
+               changeHighlighting={changeHighlighting}
+               onGenerateFullGraph={handleGenerateFullGraph}
+               onNodeSelect={handleGraphNodeSelect}
+              />
            </div>
         </div>
       )}

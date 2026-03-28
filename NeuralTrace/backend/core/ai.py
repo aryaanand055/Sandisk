@@ -1,6 +1,8 @@
 import os
+import re
 from openai import OpenAI
 from dotenv import load_dotenv
+from typing import Dict, List, Set, Tuple
 
 load_dotenv()
 
@@ -18,7 +20,104 @@ class AIEngine:
         else:
             self.enabled = False
 
-    def generate_analysis(self, old_rtl: str, new_rtl: str, testbenches: list):
+    def _extract_modules_from_code(self, rtl_code: str) -> Set[str]:
+        """Extract module names defined in Verilog code."""
+        modules = set()
+        module_pattern = r'^\s*module\s+(\w+)\s*[\(;]'
+        for match in re.finditer(module_pattern, rtl_code, re.MULTILINE):
+            modules.add(match.group(1))
+        return modules
+    
+    def _extract_module_instantiations(self, rtl_code: str) -> Dict[str, List[str]]:
+        """Extract which modules instantiate which other modules."""
+        instantiations = {}
+        current_module = None
+        module_pattern = r'^\s*module\s+(\w+)\s*[\(;]'
+        instance_pattern = r'^\s*(\w+)\s+(\w+)\s*\('
+        
+        for line in rtl_code.split('\n'):
+            module_match = re.match(module_pattern, line)
+            if module_match:
+                current_module = module_match.group(1)
+                instantiations[current_module] = []
+            elif current_module and re.match(instance_pattern, line):
+                instance_match = re.match(instance_pattern, line)
+                if instance_match:
+                    module_type = instance_match.group(1)
+                    if module_type not in ['reg', 'wire', 'input', 'output', 'logic', 'bit', 'int']:
+                        instantiations[current_module].append(module_type)
+        
+        return instantiations
+    
+    def _analyze_rtl_delta(self, old_rtl: str, new_rtl: str) -> Dict:
+        """Analyze structural differences between old and new RTL."""
+        old_modules = self._extract_modules_from_code(old_rtl)
+        new_modules = self._extract_modules_from_code(new_rtl)
+        
+        added_modules = new_modules - old_modules
+        deleted_modules = old_modules - new_modules
+        
+        # Find modified modules by comparing line-by-line
+        modified_modules = set()
+        for module in old_modules & new_modules:
+            # Extract module content
+            old_module_match = re.search(f'module\\s+{module}\\s*[\\(].*?^endmodule', old_rtl, re.MULTILINE | re.DOTALL)
+            new_module_match = re.search(f'module\\s+{module}\\s*[\\(].*?^endmodule', new_rtl, re.MULTILINE | re.DOTALL)
+            
+            if old_module_match and new_module_match:
+                old_module_code = old_module_match.group(0)
+                new_module_code = new_module_match.group(0)
+                if old_module_code != new_module_code:
+                    modified_modules.add(module)
+        
+        return {
+            'added_modules': list(added_modules),
+            'deleted_modules': list(deleted_modules),
+            'modified_modules': list(modified_modules)
+        }
+    
+    def _map_testbenches_to_modules(self, testbenches: Dict[str, str], rtl_code: str) -> Dict[str, List[str]]:
+        """Map testbenches to the modules they test."""
+        testbench_to_modules = {}
+        
+        # Extract all modules defined in RTL
+        rtl_modules = self._extract_modules_from_code(rtl_code)
+        
+        for tb_name, tb_code in testbenches.items():
+            testbench_to_modules[tb_name] = []
+            
+            # Check which modules are instantiated in this testbench
+            for module in rtl_modules:
+                # Look for module instantiation in testbench
+                if re.search(f'\\b{module}\\s+\\w+\\s*\\(', tb_code):
+                    testbench_to_modules[tb_name].append(module)
+            
+            # Also check for module reference in includes or comments
+            for line in tb_code.split('\n'):
+                for module in rtl_modules:
+                    if module in line and ('instantiate' in line.lower() or 'test' in line.lower() or 'verify' in line.lower()):
+                        if module not in testbench_to_modules[tb_name]:
+                            testbench_to_modules[tb_name].append(module)
+        
+        return testbench_to_modules
+    
+    def _determine_affected_testbenches(self, modified_rtl: str, testbenches: Dict[str, str], 
+                                      rtl_code: str) -> List[str]:
+        """Determine which testbenches need to be rerun based on changes."""
+        delta = self._analyze_rtl_delta(rtl_code, modified_rtl)
+        testbench_mapping = self._map_testbenches_to_modules(testbenches, rtl_code)
+        
+        affected_testbenches = []
+        affected_modules = set(delta['modified_modules'] + delta['added_modules'] + delta['deleted_modules'])
+        
+        for tb_name, modules_tested in testbench_mapping.items():
+            # If any module tested by this testbench was modified, it needs to rerun
+            if any(module in affected_modules for module in modules_tested):
+                affected_testbenches.append(tb_name)
+        
+        return affected_testbenches
+
+    def generate_analysis(self, old_rtl: str, new_rtl: str, testbenches: Dict[str, str]):
         if not self.enabled:
             return {
                 "delta": {"modified_modules": [], "changed_signals": [], "changed_blocks": []},
@@ -30,97 +129,129 @@ class AIEngine:
                 ],
                 "stale_testbenches": []
             }
-
+        
+        # Perform structural analysis
+        rtl_delta = self._analyze_rtl_delta(old_rtl, new_rtl)
+        affected_testbenches = self._determine_affected_testbenches(new_rtl, testbenches, old_rtl)
+        
+        # Format testbench content for context
+        testbench_context = "\n\n".join([
+            f"### Testbench: {tb_name} (Tests modules: {', '.join(self._map_testbenches_to_modules({tb_name: code}, old_rtl).get(tb_name, []))})\n```verilog\n{code[:1000]}...\n```"
+            for tb_name, code in list(testbenches.items())[:5]  # Limit to first 5 for context
+        ])
+        
+        # Build detailed prompt with structural information
         prompt = f"""
-        You are an RTL Verification Expert AI. You are helping a hardware engineer analyze a code change.
-        
-        ### RTL CONTEXT ###
-        OLD CODE:
-        ```verilog
-        {old_rtl}
-        ```
-        
-        NEW CODE:
-        ```verilog
-        {new_rtl}
-        ```
-        
-        ### AVAILABLE TESTBENCHES (Filename -> Content Mapping) ###
-        {testbenches}
+You are an expert RTL Verification Engineer. Analyze this Verilog code change with precision.
 
-        ### TASK ###
-        1. Identify the exact delta in the RTL (Modified Modules, Changed Signals, and Changed Blocks).
-        2. Create a Real-World Verification Impact Map depicting the dependency cascade of the code change. 
-           - Map how the RTL change impacts the testbench environment.
-           - Node types MUST be one of: 'module', 'signal', 'verification' (e.g. UVM Driver, Monitor, Sequencer), or 'coverage'.
-           - Edges must map the logical dataflow/dependency (e.g. module -> signal -> verification -> coverage).
-        3. Assess the risk level of this change (High, Medium, or Low) based on verification impact.
-        4. Provide exactly 3 specific, actionable verification suggestions.
-        5. Identify which of the available testbenches MUST be run again due to the changes.
-           - If a core logic block (always block) or state machine is changed, most testbenches using that module probably need to rerun.
-           - If a DEFAULT PARAMETER is changed, only testbenches that rely on the default value (i.e. DO NOT override that parameter) should be marked as stale.
-           - If a LOCALPARAM or INTERNAL SIGNAL is changed, focus on testbenches that monitor that specific functionality.
-           - If a change is purely whitespace or comments, no testbenches should be marked as stale.
-        
-        Return strictly a valid JSON object matching this schema. The "fixed_code" field for each suggestion must contain the FULL updated content of the code with the suggested fix applied.
-        {{
-          "delta": {{
-              "modified_modules": ["module1"],
-              "changed_signals": ["sig1"],
-              "changed_blocks": ["always block description"]
-          }},
-          "impact_map": {{
-              "nodes": [
-                 {{"id": "1", "label": "Module UART", "type": "module"}},
-                 {{"id": "2", "label": "Interface: tx_data", "type": "signal"}},
-                 {{"id": "3", "label": "UVM Monitor: tx_data", "type": "verification"}},
-                 {{"id": "4", "label": "Coverage: tx_data Enum", "type": "coverage"}}
-              ],
-              "edges": [
-                 {{"source": "1", "target": "2"}},
-                 {{"source": "2", "target": "3"}},
-                 {{"source": "3", "target": "4"}}
-              ]
-          }},
-          "risk": "Medium",
-          "suggestions": [
-            {{"description": "suggestion 1", "fixed_code": "modified verilog code..."}},
-            {{"description": "suggestion 2", "fixed_code": "modified verilog code..."}},
-            {{"description": "suggestion 3", "fixed_code": "modified verilog code..."}}
-          ],
-          "stale_testbenches": ["tb_filename1.v"]
-        }}
-        """
+### STRUCTURAL ANALYSIS (PRE-COMPUTED) ###
+Modified Modules: {', '.join(rtl_delta['modified_modules']) or 'NONE'}
+Added Modules: {', '.join(rtl_delta['added_modules']) or 'NONE'}
+Deleted Modules: {', '.join(rtl_delta['deleted_modules']) or 'NONE'}
+Testbenches Affected by Changes: {', '.join(affected_testbenches) or 'NONE'}
+
+### RTL CODE CHANGES ###
+OLD CODE:
+```verilog
+{old_rtl[:2000]}
+```
+
+NEW CODE:
+```verilog
+{new_rtl[:2000]}
+```
+
+### TESTBENCH CONTEXT ###
+{testbench_context}
+
+### ANALYSIS REQUIREMENTS ###
+1. **Identify Modified Signals**: List all signals, ports, or parameters that changed
+2. **Changed Logic Blocks**: Identify always blocks, assign statements, or state machines that were modified
+3. **Critical Impact**: Evaluate impact on module functionality using this logic:
+   - Core logic changes = HIGH risk (always/combinational blocks modified)
+   - Parameter/port changes = MEDIUM-HIGH risk (may affect multiple testbenches)
+   - Signal name/type changes = MEDIUM risk (affects testbench coupling)
+   - Internal signal changes = MEDIUM risk (affects internal behavior)
+   - Comments/whitespace only = LOW risk (no functional impact)
+4. **Verification Impact Chain**: Create clear dataflow showing how changes cascade
+5. **Testbench Selection MUST follow these rules**:
+   - Mark testbenches that instantiate modified modules as STALE
+   - Mark testbenches that depend on modified parameters as STALE
+   - Mark testbenches that monitor modified signals as STALE
+   - Do NOT mark testbenches as stale if only comments/whitespace changed
+   - Use the pre-computed "Testbenches Affected by Changes" as a strong signal
+
+Return ONLY valid JSON (no markdown, no code blocks):
+{{
+  "delta": {{
+    "modified_modules": {rtl_delta['modified_modules']},
+    "changed_signals": ["list of changed signals/ports"],
+    "changed_blocks": ["list of changed always blocks or assign statements"]
+  }},
+  "impact_map": {{
+    "nodes": [
+      {{"id": "1", "label": "Module name", "type": "module"}},
+      {{"id": "2", "label": "Signal name", "type": "signal"}},
+      {{"id": "3", "label": "Test coverage", "type": "verification"}}
+    ],
+    "edges": [
+      {{"source": "1", "target": "2"}},
+      {{"source": "2", "target": "3"}}
+    ]
+  }},
+  "risk": "High|Medium|Low",
+  "risk_reason": "explain the risk level based on change type",
+  "suggestions": [
+    {{"description": "specific, actionable suggestion 1", "fixed_code": "full corrected module code"}},
+    {{"description": "specific, actionable suggestion 2", "fixed_code": "full corrected module code"}},
+    {{"description": "specific, actionable suggestion 3", "fixed_code": "full corrected module code"}}
+  ],
+  "stale_testbenches": {affected_testbenches}
+}}
+"""
         
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[
-                    {"role": "system", "content": "You are an RTL Verification Expert AI. Returen strictly a valid JSON object."},
+                    {"role": "system", "content": "You are an RTL Verification Expert AI. Return strictly valid JSON format (no markdown code blocks)."},
                     {"role": "user", "content": prompt}
                 ],
                 response_format={"type": "json_object"}
             )
-            import json
-            import re
             
+            import json
             raw_text = response.choices[0].message.content
             
             if not raw_text:
                 raise ValueError("Empty response from AI")
 
-            # Clean up potential markdown formatting that might be injected
-            raw_text = re.sub(r'^```json\s*', '', raw_text.strip(), flags=re.IGNORECASE)
+            # Clean up potential markdown formatting
+            raw_text = re.sub(r'^```(?:json)?\s*', '', raw_text.strip(), flags=re.IGNORECASE)
             raw_text = re.sub(r'\s*```$', '', raw_text.strip())
             
             data = json.loads(raw_text)
+            
+            # Ensure stale_testbenches contains the affected ones
+            if 'stale_testbenches' not in data:
+                data['stale_testbenches'] = affected_testbenches
+            
             return data
 
         except Exception as e:
+            # Fallback to structural analysis if AI fails
             return {
-                "delta": {"modified_modules": [], "changed_signals": [], "changed_blocks": []},
+                "delta": {
+                    "modified_modules": rtl_delta['modified_modules'],
+                    "changed_signals": [],
+                    "changed_blocks": []
+                },
                 "impact_map": {"nodes": [], "edges": []},
-                "risk": "Error",
-                "suggestions": [f"AI call failed: {str(e)}"],
-                "stale_testbenches": []
+                "risk": "Medium",
+                "risk_reason": f"AI analysis failed, using structural detection: {str(e)}",
+                "suggestions": [
+                    {"description": "Run all affected testbenches to validate changes", "fixed_code": new_rtl}
+                ],
+                "stale_testbenches": affected_testbenches
             }
+

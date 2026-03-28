@@ -1,0 +1,238 @@
+/* Graph Node Styling */
+.graph-node {
+  padding: 10px;
+  border: 2px solid #555;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 12px;
+  text-align: center;
+  background: #254e70;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+}
+
+.graph-node:hover {
+  box-shadow: 0 6px 12px -1px rgba(0, 0, 0, 0.7);
+  transform: scale(1.05);
+}
+
+.graph-node.selected {
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.5);
+}
+
+/* Pulse animation for changed nodes */
+@keyframes pulse-signal {
+  0%, 100% {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 12px 2px rgba(255, 255, 255, 0.5);
+    transform: scale(1.08);
+  }
+}
+
+.animate-pulse-signal {
+  animation: pulse-signal 2s cubic-bezier(0.4, 0, 0.6, 1) 5 !important;
+}
+
+/* Tooltip styling */
+.graph-tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1f2937;
+  border: 1px solid #4b5563;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 8px;
+  white-space: nowrap;
+  font-size: 11px;
+  z-index: 1000;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.graph-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid #1f2937;
+}
+
+.tooltip-title {
+  font-weight: bold;
+  margin-bottom: 6px;
+  color: #f3f4f6;
+  border-bottom: 1px solid #4b5563;
+  padding-bottom: 4px;
+}
+
+.tooltip-row {
+  display: flex;
+  gap: 6px;
+  color: #e5e7eb;
+  margin: 2px 0;
+}
+
+.tooltip-label {
+  font-weight: 600;
+  color: #9ca3af;
+  min-width: 60px;
+}
+
+/* Loading spinner */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 0.75s linear infinite;
+}
+
+/* Impact gradient visualization */
+.impact-gradient-0 {
+  filter: drop-shadow(0 0 8px #ff6b6b);
+}
+
+.impact-gradient-1 {
+  filter: drop-shadow(0 0 6px #ff8c8c);
+}
+
+.impact-gradient-2 {
+  filter: drop-shadow(0 0 4px #ffadad);
+}
+
+.impact-gradient-3 {
+  filter: drop-shadow(0 0 2px #ffc9c9);
+}
+
+/* Edge styling by type */
+.edge-has-port {
+  stroke: #d97706 !important;
+}
+
+.edge-has-parameter {
+  stroke: #7c3aed !important;
+}
+
+.edge-uses-signal {
+  stroke: #06b6d4 !important;
+}
+
+.edge-assignment {
+  stroke: #ec4899 !important;
+}
+
+.edge-module-instantiation {
+  stroke: #4caf50 !important;
+}
+
+/* Status badges */
+.status-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: bold;
+  margin-left: 4px;
+}
+
+.status-badge.added {
+  background: #22c55e;
+  color: white;
+}
+
+.status-badge.deleted {
+  background: #ef4444;
+  color: white;
+}
+
+.status-badge.modified {
+  background: #eab308;
+  color: white;
+}
+
+/* Smooth transitions */
+.react-flow__node {
+  transition: all 0.2s ease;
+}
+
+.react-flow__edge {
+  transition: all 0.2s ease;
+}
+
+/* Graph controls enhancement */
+.react-flow__controls {
+  background: rgba(31, 41, 55, 0.8);
+  border: 1px solid rgba(75, 85, 99, 0.5);
+  border-radius: 8px;
+}
+
+.react-flow__controls button {
+  background: rgba(75, 85, 99, 0.8);
+  color: #f3f4f6;
+  border: 1px solid rgba(107, 114, 128, 0.5);
+  transition: all 0.2s ease;
+}
+
+.react-flow__controls button:hover {
+  background: rgba(107, 114, 128, 0.8);
+}
+
+/* MiniMap styling */
+.react-flow__minimap {
+  background: rgba(31, 41, 55, 0.8);
+  border: 1px solid rgba(75, 85, 99, 0.5);
+}
+
+/* Stress test for large graphs - optional optimizations */
+@media (max-width: 1024px) {
+  .graph-node {
+    padding: 8px;
+    font-size: 11px;
+  }
+  
+  .graph-tooltip {
+    font-size: 10px;
+  }
+}
+
+/* Dark theme compatibility */
+:root {
+  --dark-bg: #111827;
+  --dark-border: #374151;
+  --dark-text: #f3f4f6;
+  --light-text: #9ca3af;
+}
+
+/* Status indicator */
+.graph-status-indicator {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-left: 4px;
+}
+
+.graph-status-indicator.healthy {
+  background: #10b981;
+}
+
+.graph-status-indicator.warning {
+  background: #f59e0b;
+}
+
+.graph-status-indicator.critical {
+  background: #ef4444;
+}
