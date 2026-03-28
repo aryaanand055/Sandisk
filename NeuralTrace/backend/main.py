@@ -15,7 +15,7 @@ from pyverilog.vparser.parser import VerilogParser
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 PYTHON_EXECUTABLE = os.getenv("PYTHON_EXECUTABLE", sys.executable)
-ZYBO_SCRIPT_DIR = os.getenv("ZYBO_SCRIPT_DIR", os.path.join(os.path.expanduser("~"), "Desktop"))
+ZED_BOARD_SCRIPT_DIR = os.getenv("ZED_BOARD_SCRIPT_DIR", os.path.join(os.path.expanduser("~"), "Desktop"))
 
 app = FastAPI(title="Neural Trace API")
 
@@ -48,7 +48,7 @@ class ApplyFixRequest(BaseModel):
     path: str
     fixed_code: str
 
-class ZyboRequest(BaseModel):
+class ZedBoardRequest(BaseModel):
     affected_modules: list
     testbenches: dict = {}
 
@@ -338,8 +338,8 @@ def apply_fix(req: ApplyFixRequest):
     except Exception as e:
         return {"error": str(e)}
 
-@app.post("/connect-zybo")
-def connect_zybo(req: ZyboRequest):
+@app.post("/connect-zed-board")
+def connect_zed_board(req: ZedBoardRequest):
     """
     Aggregates project files and analysis into a single JSON file
     and executes the connection script on the Desktop.
@@ -371,10 +371,10 @@ def connect_zybo(req: ZyboRequest):
     }
 
     # 3. Path detection for script and task file
-    desktop_path = ZYBO_SCRIPT_DIR
-    script_name = "zybo_connect.py" 
+    desktop_path = ZED_BOARD_SCRIPT_DIR
+    script_name = "zed_board_connect.py" 
     script_path = os.path.join(desktop_path, script_name)
-    json_task_path = os.path.join(desktop_path, "zybo_task.json")
+    json_task_path = os.path.join(desktop_path, "zed_board_task.json")
 
     if not os.path.exists(script_path):
         return {

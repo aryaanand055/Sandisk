@@ -346,24 +346,24 @@ function App() {
     }
   };
 
-  const handleConnectZybo = async () => {
+  const handleConnectZedBoard = async () => {
     // Use the latest AI analysis data for the affected modules
     const affectedModules = impactData?.delta?.modified_modules || [];
     
     setIsAnalyzing(true);
     try {
-      const res = await axios.post(`${API_URL}/connect-zybo`, { 
+      const res = await axios.post(`${API_URL}/connect-zed-board`, { 
         affected_modules: affectedModules,
         testbenches: {} // In the future, this can be mapped from our file explorer state
       });
       if (res.data.status === 'success') {
-        alert("Zybo Connection Success:\n" + res.data.output);
+        alert("Zed Board Connection Success:\n" + res.data.output);
       } else {
-        alert("Zybo Connection Failed:\n" + (res.data.error || res.data.stderr));
+        alert("Zed Board Connection Failed:\n" + (res.data.error || res.data.stderr));
       }
     } catch (err) {
        console.error(err);
-       alert("Error connecting to Zybo server.");
+       alert("Error connecting to Zed Board server.");
     } finally {
       setIsAnalyzing(false);
     }
@@ -497,7 +497,7 @@ function App() {
 
            {/* Hardware Connection */}
            <button 
-             onClick={handleConnectZybo}
+             onClick={handleConnectZedBoard}
              disabled={isAnalyzing}
              className={`flex items-center gap-2 px-4 py-1.5 rounded text-[11px] font-bold uppercase tracking-wider transition-all shadow-lg ${
                isAnalyzing 
@@ -506,7 +506,7 @@ function App() {
              }`}
            >
              <Cpu size={14} className={isAnalyzing ? 'animate-pulse' : ''} /> 
-             {isAnalyzing ? 'Connecting...' : 'Connect to Zybo'}
+             {isAnalyzing ? 'Connecting...' : 'Connect to Zed Board'}
            </button>
         </div>
       </header>
